@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Tracker
+GenericName=Video Analysis and Modeling
+Comment=Video analysis and modeling tool for physics education
+Exec=tracker %f
+Icon=tracker
+Categories=Science;
+Terminal=false
+StartupWMClass=org.opensourcephysics.cabrillo.tracker.Tracker

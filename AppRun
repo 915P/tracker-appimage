@@ -1,0 +1,45 @@
+#!/bin/sh
+# Tracker AppImage wrapper - see README.md
+# 把官方 tracker.jar + xuggle 视频引擎包成单文件，解决官方 Linux 安装包
+# 托管在 physlets.org、国内常超时下不了的问题。
+HERE="$(dirname "$(readlink -f "$0")")"
+TJ="$HERE/usr/lib/tracker"
+
+# ---- Java 检查（AppImage 不内置 JRE，用系统 Java 17+）----
+if ! command -v java >/dev/null 2>&1; then
+    echo "Tracker: 找不到 java。本 AppImage 需要系统安装 Java 17 或更高版本。" >&2
+    echo "  Debian/Ubuntu : sudo apt install openjdk-17-jre" >&2
+    echo "  Fedora        : sudo dnf install java-17-openjdk" >&2
+    echo "  Arch          : sudo pacman -S jre17-openjdk" >&2
+    echo "  其它发行版    : https://adoptium.net/" >&2
+    exit 1
+fi
+
+# ---- 高分屏缩放：读 Xft.dpi 自动算（96->1, 192->2, 240->2.5），可用 TRACKER_SCALE 覆盖 ----
+if [ -z "${TRACKER_SCALE:-}" ]; then
+    dpi=$(xrdb -query 2>/dev/null | awk '/^Xft\.dpi:/{print $2; exit}')
+    [ -n "$dpi" ] || dpi=96
+    TRACKER_SCALE=$(awk -v d="$dpi" 'BEGIN{
+        s = d / 96
+        r = int(s * 2 + 0.5) / 2        # 取整到 0.5
+        if (r < 1) r = 1
+        if (r > 4) r = 4
+        print r
+    }')
+fi
+
+# ---- 关键：预先导出 TRACKER_HOME/XUGGLE_HOME，Tracker 就不会自我 relaunch ----
+# （relaunch 会换掉父进程，FUSE 挂载点随之卸载，后续类加载会失败）
+export TRACKER_HOME="$TJ"
+export XUGGLE_HOME="$TJ"
+export _JAVA_OPTIONS="-Dsun.java2d.uiScale=$TRACKER_SCALE"
+
+# --enable-native-access 只在 Java 17+ 存在，用来消除 24+ 的 JNI 警告
+NA=""
+ver=$(java -version 2>&1 | awk -F'[".]' '/version/{print ($2 == "1") ? $3 : $2; exit}')
+[ -n "$ver" ] && [ "$ver" -ge 17 ] 2>/dev/null && NA="--enable-native-access=ALL-UNNAMED"
+
+cd "$TJ" || exit 1
+exec java $NA -Xms32m -Xmx1024m \
+    -cp "xuggle-xuggler-server-all.jar:logback-classic.jar:logback-core.jar:slf4j-api.jar" \
+    -jar "$TJ/tracker.jar" "$@"
