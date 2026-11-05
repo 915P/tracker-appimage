@@ -36,24 +36,27 @@ fetch() { # <url> <dest>
         return 0
     fi
     echo "  ↓ $(basename "$dest")"
+    rm -f "$dest" "$dest.aria2" "$dest.part"
     if command -v aria2c >/dev/null 2>&1; then
-        # 多线程分段下载（16 连接 × 4 MB 分段），国内直连 GitHub 也能跑满带宽
-        if ! aria2c -x16 -s16 -k4M \
-                --max-tries=3 --retry-wait=2 \
+        # 多线程分段下载（16 连接 × 4 MB 分段），国内直连 GitHub 明显更快
+        if aria2c -x16 -s16 -k4M \
+                --max-tries=4 --retry-wait=3 --timeout=30 \
                 --console-log-level=warn --summary-interval=0 \
                 --file-allocation=none \
                 -d "$(dirname "$dest")" -o "$(basename "$dest")" "$url"; then
-            echo "下载失败: $url" >&2
-            exit 1
+            return 0
         fi
-    else
-        if ! curl -sfL --retry 3 --connect-timeout 15 --max-time 600 -o "$dest.part" "$url"; then
-            echo "下载失败: $url（安装 aria2c 可多线程加速）" >&2
-            rm -f "$dest.part"
-            exit 1
-        fi
-        mv "$dest.part" "$dest"
+        echo "  ! aria2c 失败，回退单线程 curl 重试" >&2
+        rm -f "$dest" "$dest.aria2"
     fi
+    # 单线程兜底（也是没装 aria2c 时的路径）
+    if ! curl -sfL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 900 \
+            -o "$dest.part" "$url"; then
+        echo "下载失败: $url" >&2
+        rm -f "$dest.part"
+        exit 1
+    fi
+    mv "$dest.part" "$dest"
 }
 
 echo "[1/4] 下载上游产物 -> $CACHE"
@@ -64,11 +67,14 @@ done
 fetch "$APPIMAGETOOL_URL" "$CACHE/appimagetool.AppImage"
 fetch "$RUNTIME_URL" "$CACHE/runtime-${ARCH}"
 
-# 校验 jar 是真 zip，别把 HTML 错误页打进镜像
-unzip -tqq "$CACHE/tracker-${VERSION}.jar" >/dev/null || {
-    echo "tracker.jar 损坏（不是有效 zip），删除 $CACHE/tracker-${VERSION}.jar 后重试" >&2
-    exit 1
-}
+# 校验所有 jar 都是真 zip，别把 HTML 错误页或超时截断的文件打进镜像
+for j in "$CACHE"/*.jar; do
+    [ -e "$j" ] || continue
+    unzip -tqq "$j" >/dev/null || {
+        echo "损坏（不是有效 zip）: $j —— 删除后重试" >&2
+        exit 1
+    }
+done
 
 echo "[2/4] 组装 AppDir"
 rm -rf "$APPDIR"
